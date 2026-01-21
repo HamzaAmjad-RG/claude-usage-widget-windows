@@ -1,4 +1,4 @@
-<img width="1640" height="1546" alt="image" src="https://github.com/user-attachments/assets/7629a9dd-02c5-48b4-bcc5-2660033e3837" /># claude-usage-widget
+# claude-usage-widget
 
 Python script to view the Claude session and weekly limit in the Mac menu bar
 <img width="447" height="105" alt="image" src="https://github.com/user-attachments/assets/ce92d374-2688-4c9a-919a-d9fb12b57c5d" />
