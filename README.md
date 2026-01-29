@@ -147,6 +147,40 @@ Notifications are sent only once per threshold to avoid spam.
 - Get a fresh cURL command from Claude's usage page
 - Replace the contents of `curl.txt` with the new command
 
+## Auto-Start on Windows
+
+To make the app start automatically when you log in to Windows:
+
+### Option 1: Using Startup Folder (Recommended)
+
+1. **Locate your Startup folder**:
+   - Press `Win + R`
+   - Type: `shell:startup`
+   - Press Enter
+
+2. **Create a shortcut**:
+   - Right-click in the Startup folder
+   - Select `New` → `Shortcut`
+   - Browse to: `C:\claude_projects\claude_usage_widget\claude-usage-widget\start_claude_monitor_silent.vbs`
+   - Click `Next`, name it "Claude Usage Monitor", and click `Finish`
+
+3. **Done!** The app will now start automatically when you log in (no console window will appear).
+
+### Option 2: Manual Start
+
+If you prefer to start manually, simply run:
+```bash
+cd claude-usage-widget
+python claude_usage_menubar.py
+```
+
+Or double-click `start_claude_monitor_silent.vbs` to run without a console window.
+
+### Startup Files Included
+
+- **`start_claude_monitor.bat`** - Batch file to start the app (shows console)
+- **`start_claude_monitor_silent.vbs`** - VBScript to start silently (no console window) ⭐ Recommended
+
 ## Configuration
 
 Edit `claude_usage_menubar.py` to customize:
