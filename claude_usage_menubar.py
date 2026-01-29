@@ -635,15 +635,67 @@ class WindowsTrayApp(UsageMonitorApp):
         # Run icon (blocking)
         self.icon.run()
 
-    def create_icon_image(self):
-        """Create a simple tray icon image"""
-        # Create 64x64 icon with "C" letter
+    def create_icon_image(self, usage_percent=None):
+        """Create a color-coded tray icon with usage percentage"""
         width = 64
         height = 64
-        image = Image.new('RGB', (width, height), color='white')
+
+        # Determine color based on usage level
+        if usage_percent is None:
+            # Default gray when loading
+            fill_color = 'gray'
+            outline_color = 'darkgray'
+            text_color = 'white'
+            display_text = "?"
+        else:
+            # Color coding based on usage
+            if usage_percent < 50:
+                fill_color = '#28a745'  # Green
+                outline_color = '#1e7e34'
+            elif usage_percent < 75:
+                fill_color = '#ffc107'  # Yellow/Amber
+                outline_color = '#e0a800'
+            else:
+                fill_color = '#dc3545'  # Red
+                outline_color = '#bd2130'
+
+            text_color = 'white'
+            display_text = f"{int(usage_percent)}"
+
+        # Create icon image with transparent background
+        image = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
-        dc.ellipse([8, 8, 56, 56], fill='blue', outline='darkblue')
-        dc.text((20, 18), "C", fill='white')
+
+        # Draw colored circle
+        dc.ellipse([4, 4, 60, 60], fill=fill_color, outline=outline_color, width=2)
+
+        # Draw usage percentage text
+        # Use a larger size for better readability
+        try:
+            from PIL import ImageFont
+            # Try to use a larger font
+            try:
+                font = ImageFont.truetype("arial.ttf", 24)
+            except:
+                font = ImageFont.load_default()
+        except:
+            font = None
+
+        # Calculate text position to center it
+        if font:
+            bbox = dc.textbbox((0, 0), display_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        else:
+            # Estimate for default font
+            text_width = len(display_text) * 6
+            text_height = 8
+
+        text_x = (width - text_width) // 2
+        text_y = (height - text_height) // 2 - 2
+
+        dc.text((text_x, text_y), display_text, fill=text_color, font=font)
+
         return image
 
     def start_background_threads(self):
@@ -668,12 +720,20 @@ class WindowsTrayApp(UsageMonitorApp):
                 self.update_countdown_display()
 
     def update_display(self, usage_text, usage_data):
-        """Update system tray tooltip and menu items"""
+        """Update system tray tooltip, icon, and menu items"""
         if self.icon:
             self.icon.title = usage_text
 
-            # Update menu items
+            # Update icon with 5-hour usage percentage and color
             if usage_data:
+                five_hour = usage_data.get("five_hour", 0)
+
+                # Use 5-hour usage for the icon
+                if isinstance(five_hour, (int, float)):
+                    self.icon.icon = self.create_icon_image(five_hour)
+                else:
+                    self.icon.icon = self.create_icon_image(None)
+
                 five_hour_reset_text = format_reset_time(usage_data["five_hour_reset"])
                 seven_day_reset_text = format_reset_time(usage_data["seven_day_reset"])
                 five_hour_abs = format_absolute_time(usage_data["five_hour_reset"])
