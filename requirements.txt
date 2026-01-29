@@ -1,1 +1,7 @@
-rumps>=0.4.0
+# macOS dependencies
+rumps>=0.4.0; sys_platform == 'darwin'
+
+# Windows dependencies
+pystray>=0.19.5; sys_platform == 'win32'
+Pillow>=10.0.0; sys_platform == 'win32'
+win11toast>=0.34; sys_platform == 'win32'

@@ -3,11 +3,21 @@
 import os
 import json
 import subprocess
-import rumps
-from datetime import datetime
+from datetime import datetime, timedelta
 import shlex
 import uuid
 from urllib.parse import urlparse
+import platform
+import threading
+from abc import ABC, abstractmethod
+
+# Conditional imports based on platform
+if platform.system() == "Darwin":  # macOS
+    import rumps
+elif platform.system() == "Windows":
+    import pystray
+    from PIL import Image, ImageDraw
+    from win11toast import notify
 
 
 # Config
@@ -76,12 +86,12 @@ def should_send_notification(usage_type, current_utilization, state):
     
     return None
 
-def send_notification(usage_type, threshold, current_utilization):
+def send_notification_macos(usage_type, threshold, current_utilization):
     """Send a macOS notification using both rumps and osascript"""
     title = f"Claude Usage Alert"
     subtitle = f"{usage_type.replace('_', ' ').title()}"
     message = f"Usage reached {current_utilization}% (threshold: {threshold}%)"
-    
+
     # Method 1: rumps (may not work if app is not signed/notarized)
     try:
         rumps.notification(
@@ -92,7 +102,7 @@ def send_notification(usage_type, threshold, current_utilization):
         )
     except Exception as e:
         pass
-    
+
     # Method 2: osascript (more reliable)
     try:
         subprocess.run([
@@ -101,6 +111,29 @@ def send_notification(usage_type, threshold, current_utilization):
         ], check=True, capture_output=True, text=True)
     except Exception as e:
         pass
+
+def send_notification_windows(usage_type, threshold, current_utilization):
+    """Send a Windows notification using win11toast"""
+    title = f"Claude Usage Alert"
+    subtitle = f"{usage_type.replace('_', ' ').title()}"
+    message = f"Usage reached {current_utilization}% (threshold: {threshold}%)"
+
+    try:
+        notify(
+            title=title,
+            body=f"{subtitle}\n{message}",
+            app_id="Claude Usage Monitor",
+            audio="ms-winsoundevent:Notification.Default"
+        )
+    except Exception as e:
+        debug_log(f"Windows notification failed: {e}")
+
+def send_notification(usage_type, threshold, current_utilization):
+    """Platform-agnostic notification dispatcher"""
+    if platform.system() == "Darwin":
+        send_notification_macos(usage_type, threshold, current_utilization)
+    elif platform.system() == "Windows":
+        send_notification_windows(usage_type, threshold, current_utilization)
 
 def reset_notifications_if_needed(usage_type, current_utilization, state):
     """Reset notification state for any thresholds that usage has fallen below"""
@@ -156,9 +189,13 @@ def format_absolute_time_with_day(reset_time_str):
 def run_newman():
     """Run Newman and export JSON output"""
     debug_log("Running Newman with collection:", COLLECTION_FILE)
+
+    # Use newman.cmd on Windows, newman on other platforms
+    newman_cmd = "newman.cmd" if platform.system() == "Windows" else "newman"
+
     try:
         result = subprocess.run([
-            "newman", "run", COLLECTION_FILE,
+            newman_cmd, "run", COLLECTION_FILE,
             "-r", "json",
             "--reporter-json-export", NEWMAN_OUTPUT_FILE
         ], check=True, capture_output=True, text=True)
@@ -275,6 +312,17 @@ def generate_postman_collection_from_curl(curl_command: str):
     import shlex
     import uuid
     from urllib.parse import urlparse
+    import re
+
+    # Clean Windows batch-style cURL command
+    # Remove ^ line continuation and escape characters
+    if platform.system() == "Windows":
+        # Remove ^ at end of lines (line continuation)
+        curl_command = re.sub(r'\^\s*\n\s*', ' ', curl_command)
+        # Remove ^ before quotes
+        curl_command = curl_command.replace('^"', '"')
+        # Remove any remaining standalone ^ characters
+        curl_command = re.sub(r'\^(?=[^"])', '', curl_command)
 
     tokens = shlex.split(curl_command)
     method = "GET"
@@ -362,34 +410,138 @@ def generate_postman_collection_from_curl(curl_command: str):
     debug_log("Postman collection generated successfully:", COLLECTION_FILE)
 
 
-class MenuBarApp(rumps.App):
+class UsageMonitorApp(ABC):
+    """Abstract base class for platform-specific implementations"""
+
     def __init__(self):
-        super(MenuBarApp, self).__init__("Usage")
         self.notification_state = load_notification_state()
         self.next_update_time = None
-        self.menu = [
-            "Update Now",
-            "Check Notification State",
-            "Reset Notification History",
-            "Test Notification",
+        self.current_usage_text = "Loading..."
+        self.current_usage_data = None
+
+    @abstractmethod
+    def run(self):
+        """Start the application (blocking)"""
+        pass
+
+    @abstractmethod
+    def update_display(self, usage_text, usage_data):
+        """Update the UI with new usage information"""
+        pass
+
+    def update_usage(self):
+        """Core update logic - same for all platforms"""
+        usage_data = None
+        usage_text = "Loading..."
+
+        if run_newman():
+            usage_data, usage_text = get_usage_from_newman_json()
+
+            if usage_data:
+                # Check and send notifications for five_hour
+                if isinstance(usage_data["five_hour"], (int, float)):
+                    reset_notifications_if_needed("five_hour", usage_data["five_hour"], self.notification_state)
+                    result = should_send_notification("five_hour", usage_data["five_hour"], self.notification_state)
+
+                    if result:
+                        # Send notification only for highest threshold
+                        for threshold in result['notify']:
+                            send_notification("five_hour", threshold, usage_data["five_hour"])
+                            import time
+                            time.sleep(0.5)  # Small delay to ensure notification is processed
+
+                        # Mark all thresholds as sent
+                        for threshold in result['mark_sent']:
+                            if threshold not in self.notification_state["five_hour"]["sent"]:
+                                self.notification_state["five_hour"]["sent"].append(threshold)
+
+                        save_notification_state(self.notification_state)
+
+                # Check and send notifications for seven_day
+                if isinstance(usage_data["seven_day"], (int, float)):
+                    reset_notifications_if_needed("seven_day", usage_data["seven_day"], self.notification_state)
+                    result = should_send_notification("seven_day", usage_data["seven_day"], self.notification_state)
+
+                    if result:
+                        # Send notification only for highest threshold
+                        for threshold in result['notify']:
+                            send_notification("seven_day", threshold, usage_data["seven_day"])
+                            import time
+                            time.sleep(0.5)  # Small delay to ensure notification is processed
+
+                        # Mark all thresholds as sent
+                        for threshold in result['mark_sent']:
+                            if threshold not in self.notification_state["seven_day"]["sent"]:
+                                self.notification_state["seven_day"]["sent"].append(threshold)
+
+                        save_notification_state(self.notification_state)
+
+                # Always save state to persist any threshold resets
+                save_notification_state(self.notification_state)
+
+                self.current_usage_data = usage_data
+            else:
+                usage_text = usage_text
+        else:
+            usage_text = "Newman failed"
+
+        self.current_usage_text = usage_text
+        self.next_update_time = datetime.now() + timedelta(seconds=UPDATE_INTERVAL)
+
+        self.update_display(usage_text, usage_data if usage_data else None)
+
+
+class MacOSMenuBarApp(UsageMonitorApp):
+    """macOS menu bar implementation using rumps"""
+
+    def __init__(self):
+        super().__init__()
+        self.app = rumps.App("Usage")
+        self.app.menu = [
+            rumps.MenuItem("Update Now", callback=self.manual_update),
+            rumps.MenuItem("Check Notification State", callback=self.check_state),
+            rumps.MenuItem("Reset Notification History", callback=self.reset_notification_history),
+            rumps.MenuItem("Test Notification", callback=self.send_test_notification),
             None,  # Separator
             rumps.MenuItem("5-Hour Reset: Loading...", callback=None),
             rumps.MenuItem("7-Day Reset: Loading...", callback=None),
             rumps.MenuItem("Next Update: Loading...", callback=None)
         ]
-        
-        self.update_usage(None)
-        # Run update every interval
-        rumps.Timer(self.update_usage, UPDATE_INTERVAL).start()
-        # Run countdown timer every second
-        rumps.Timer(self.update_countdown, 1).start()
 
-    @rumps.clicked("Update Now")
+        # Start timers
+        self.update_timer = rumps.Timer(self.timer_update_usage, UPDATE_INTERVAL)
+        self.countdown_timer = rumps.Timer(self.update_countdown, 1)
+
+    def run(self):
+        """Start the rumps application"""
+        self.update_usage()  # Initial update
+        self.update_timer.start()
+        self.countdown_timer.start()
+        self.app.run()
+
+    def update_display(self, usage_text, usage_data):
+        """Update menu bar title and menu items"""
+        self.app.title = usage_text
+
+        if usage_data:
+            five_hour_reset_text = format_reset_time(usage_data["five_hour_reset"])
+            seven_day_reset_text = format_reset_time(usage_data["seven_day_reset"])
+            five_hour_abs = format_absolute_time(usage_data["five_hour_reset"])
+            seven_day_abs = format_absolute_time_with_day(usage_data["seven_day_reset"])
+
+            self.app.menu["5-Hour Reset: Loading..."].title = f"5-Hour Reset: {five_hour_reset_text} ({five_hour_abs})"
+            self.app.menu["7-Day Reset: Loading..."].title = f"7-Day Reset: {seven_day_reset_text} ({seven_day_abs})"
+
+    def timer_update_usage(self, _):
+        """Wrapper for rumps.Timer callback"""
+        self.update_usage()
+
     def manual_update(self, _):
-        self.update_usage(None)
+        """Handle manual update menu item"""
+        self.update_usage()
 
-    @rumps.clicked("Test Notification")
     def send_test_notification(self, _=None):
+        """Send test notification"""
         try:
             rumps.notification(
                 title="Claude Usage Monitor",
@@ -399,7 +551,7 @@ class MenuBarApp(rumps.App):
             )
         except Exception as e:
             pass
-        
+
         # Also try using osascript as a fallback
         try:
             subprocess.run([
@@ -409,16 +561,16 @@ class MenuBarApp(rumps.App):
         except Exception as e:
             pass
 
-    @rumps.clicked("Check Notification State")
     def check_state(self, _):
+        """Show notification state"""
         state_info = json.dumps(self.notification_state, indent=2)
         rumps.alert(
             title="Notification State",
             message=f"5-Hour sent: {self.notification_state['five_hour']['sent']}\n7-Day sent: {self.notification_state['seven_day']['sent']}"
         )
 
-    @rumps.clicked("Reset Notification History")
-    def reset_notifications(self, _):
+    def reset_notification_history(self, _):
+        """Reset notification history"""
         self.notification_state = {
             "five_hour": {"sent": []},
             "seven_day": {"sent": []}
@@ -431,85 +583,260 @@ class MenuBarApp(rumps.App):
         if self.next_update_time:
             now = datetime.now()
             time_until_update = self.next_update_time - now
-            
+
             if time_until_update.total_seconds() > 0:
                 minutes = int(time_until_update.total_seconds() // 60)
                 seconds = int(time_until_update.total_seconds() % 60)
-                self.menu["Next Update: Loading..."].title = f"Next Update: {minutes}m {seconds}s"
+                self.app.menu["Next Update: Loading..."].title = f"Next Update: {minutes}m {seconds}s"
             else:
-                self.menu["Next Update: Loading..."].title = "Next Update: Updating..."
+                self.app.menu["Next Update: Loading..."].title = "Next Update: Updating..."
         else:
-            self.menu["Next Update: Loading..."].title = "Next Update: Loading..."
+            self.app.menu["Next Update: Loading..."].title = "Next Update: Loading..."
 
-    def update_usage(self, _):
-        if run_newman():
-            usage_data, usage_text = get_usage_from_newman_json()
-            
+
+class WindowsTrayApp(UsageMonitorApp):
+    """Windows system tray implementation using pystray"""
+
+    def __init__(self):
+        super().__init__()
+        self.icon = None
+        self.update_thread = None
+        self.countdown_thread = None
+        self.stop_threads = threading.Event()
+
+    def run(self):
+        """Start the pystray application"""
+        # Create icon image
+        image = self.create_icon_image()
+
+        # Create menu
+        menu = pystray.Menu(
+            pystray.MenuItem("Update Now", self.manual_update),
+            pystray.MenuItem("Check Notification State", self.check_state),
+            pystray.MenuItem("Reset Notification History", self.reset_notification_history),
+            pystray.MenuItem("Test Notification", self.send_test_notification),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("5-Hour Reset: Loading...", None, enabled=False),
+            pystray.MenuItem("7-Day Reset: Loading...", None, enabled=False),
+            pystray.MenuItem("Next Update: Loading...", None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", self.exit_app)
+        )
+
+        # Create icon
+        self.icon = pystray.Icon("claude_usage", image, "Usage", menu)
+
+        # Start background threads
+        self.start_background_threads()
+
+        # Run initial update
+        self.update_usage()
+
+        # Run icon (blocking)
+        self.icon.run()
+
+    def create_icon_image(self, usage_percent=None):
+        """Create a color-coded tray icon with usage percentage"""
+        width = 64
+        height = 64
+
+        # Determine color based on usage level
+        if usage_percent is None:
+            # Default gray when loading
+            fill_color = 'gray'
+            outline_color = 'darkgray'
+            text_color = 'white'
+            display_text = "?"
+        else:
+            # Color coding based on usage
+            if usage_percent < 50:
+                fill_color = '#28a745'  # Green
+                outline_color = '#1e7e34'
+            elif usage_percent < 75:
+                fill_color = '#ffc107'  # Yellow/Amber
+                outline_color = '#e0a800'
+            else:
+                fill_color = '#dc3545'  # Red
+                outline_color = '#bd2130'
+
+            text_color = 'white'
+            display_text = f"{int(usage_percent)}"
+
+        # Create icon image with transparent background
+        image = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
+        dc = ImageDraw.Draw(image)
+
+        # Draw colored circle
+        dc.ellipse([4, 4, 60, 60], fill=fill_color, outline=outline_color, width=2)
+
+        # Draw usage percentage text
+        # Use a larger size for better readability
+        try:
+            from PIL import ImageFont
+            # Try to use a larger font
+            try:
+                font = ImageFont.truetype("arial.ttf", 24)
+            except:
+                font = ImageFont.load_default()
+        except:
+            font = None
+
+        # Calculate text position to center it
+        if font:
+            bbox = dc.textbbox((0, 0), display_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        else:
+            # Estimate for default font
+            text_width = len(display_text) * 6
+            text_height = 8
+
+        text_x = (width - text_width) // 2
+        text_y = (height - text_height) // 2 - 2
+
+        dc.text((text_x, text_y), display_text, fill=text_color, font=font)
+
+        return image
+
+    def start_background_threads(self):
+        """Start recurring timer threads"""
+        self.update_thread = threading.Thread(target=self.recurring_update, daemon=True)
+        self.countdown_thread = threading.Thread(target=self.recurring_countdown, daemon=True)
+        self.update_thread.start()
+        self.countdown_thread.start()
+
+    def recurring_update(self):
+        """Recurring update timer"""
+        while not self.stop_threads.is_set():
+            self.stop_threads.wait(UPDATE_INTERVAL)
+            if not self.stop_threads.is_set():
+                self.update_usage()
+
+    def recurring_countdown(self):
+        """Recurring countdown timer"""
+        while not self.stop_threads.is_set():
+            self.stop_threads.wait(1)
+            if not self.stop_threads.is_set():
+                self.update_countdown_display()
+
+    def update_display(self, usage_text, usage_data):
+        """Update system tray tooltip, icon, and menu items"""
+        if self.icon:
+            self.icon.title = usage_text
+
+            # Update icon with 5-hour usage percentage and color
             if usage_data:
-                # Check and send notifications for five_hour
-                if isinstance(usage_data["five_hour"], (int, float)):
-                    reset_notifications_if_needed("five_hour", usage_data["five_hour"], self.notification_state)
-                    result = should_send_notification("five_hour", usage_data["five_hour"], self.notification_state)
-                    
-                    if result:
-                        # Send notification only for highest threshold
-                        for threshold in result['notify']:
-                            send_notification("five_hour", threshold, usage_data["five_hour"])
-                            import time
-                            time.sleep(0.5)  # Small delay to ensure notification is processed
-                        
-                        # Mark all thresholds as sent
-                        for threshold in result['mark_sent']:
-                            if threshold not in self.notification_state["five_hour"]["sent"]:
-                                self.notification_state["five_hour"]["sent"].append(threshold)
-                        
-                        save_notification_state(self.notification_state)
-                
-                # Check and send notifications for seven_day
-                if isinstance(usage_data["seven_day"], (int, float)):
-                    reset_notifications_if_needed("seven_day", usage_data["seven_day"], self.notification_state)
-                    result = should_send_notification("seven_day", usage_data["seven_day"], self.notification_state)
-                    
-                    if result:
-                        # Send notification only for highest threshold
-                        for threshold in result['notify']:
-                            send_notification("seven_day", threshold, usage_data["seven_day"])
-                            import time
-                            time.sleep(0.5)  # Small delay to ensure notification is processed
-                        
-                        # Mark all thresholds as sent
-                        for threshold in result['mark_sent']:
-                            if threshold not in self.notification_state["seven_day"]["sent"]:
-                                self.notification_state["seven_day"]["sent"].append(threshold)
-                        
-                        save_notification_state(self.notification_state)
+                five_hour = usage_data.get("five_hour", 0)
 
-                # Always save state to persist any threshold resets
-                save_notification_state(self.notification_state)
+                # Use 5-hour usage for the icon
+                if isinstance(five_hour, (int, float)):
+                    self.icon.icon = self.create_icon_image(five_hour)
+                else:
+                    self.icon.icon = self.create_icon_image(None)
 
-                # Update menu items with reset times
                 five_hour_reset_text = format_reset_time(usage_data["five_hour_reset"])
                 seven_day_reset_text = format_reset_time(usage_data["seven_day_reset"])
                 five_hour_abs = format_absolute_time(usage_data["five_hour_reset"])
                 seven_day_abs = format_absolute_time_with_day(usage_data["seven_day_reset"])
 
-                self.menu["5-Hour Reset: Loading..."].title = f"5-Hour Reset: {five_hour_reset_text} ({five_hour_abs})"
-                self.menu["7-Day Reset: Loading..."].title = f"7-Day Reset: {seven_day_reset_text} ({seven_day_abs})"
+                # Rebuild menu with updated text
+                menu = pystray.Menu(
+                    pystray.MenuItem("Update Now", self.manual_update),
+                    pystray.MenuItem("Check Notification State", self.check_state),
+                    pystray.MenuItem("Reset Notification History", self.reset_notification_history),
+                    pystray.MenuItem("Test Notification", self.send_test_notification),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem(f"5-Hour Reset: {five_hour_reset_text} ({five_hour_abs})", None, enabled=False),
+                    pystray.MenuItem(f"7-Day Reset: {seven_day_reset_text} ({seven_day_abs})", None, enabled=False),
+                    pystray.MenuItem(self.get_countdown_text(), None, enabled=False),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem("Exit", self.exit_app)
+                )
+                self.icon.menu = menu
+
+    def get_countdown_text(self):
+        """Get countdown text for next update"""
+        if self.next_update_time:
+            now = datetime.now()
+            time_until_update = self.next_update_time - now
+
+            if time_until_update.total_seconds() > 0:
+                minutes = int(time_until_update.total_seconds() // 60)
+                seconds = int(time_until_update.total_seconds() % 60)
+                return f"Next Update: {minutes}m {seconds}s"
             else:
-                usage_text = usage_text
-        else:
-            usage_text = "Newman failed"
-        
-        self.title = usage_text
-        
-        # Set next update time
-        from datetime import timedelta
-        self.next_update_time = datetime.now() + timedelta(seconds=UPDATE_INTERVAL)
+                return "Next Update: Updating..."
+        return "Next Update: Loading..."
+
+    def update_countdown_display(self):
+        """Update just the countdown timer menu item"""
+        if self.icon and self.icon.menu:
+            # Rebuild menu to update countdown (pystray limitation)
+            self.update_display(self.current_usage_text, self.current_usage_data)
+
+    def manual_update(self, icon=None, item=None):
+        """Handle manual update menu item"""
+        threading.Thread(target=self.update_usage, daemon=True).start()
+
+    def send_test_notification(self, icon=None, item=None):
+        """Send test notification"""
+        try:
+            notify(
+                title="Claude Usage Monitor",
+                body="Test Notification\nIf you see this, notifications are working!",
+                app_id="Claude Usage Monitor",
+                audio="ms-winsoundevent:Notification.Default"
+            )
+        except Exception as e:
+            debug_log(f"Test notification failed: {e}")
+
+    def check_state(self, icon=None, item=None):
+        """Show notification state - Windows version"""
+        # Use win11toast to show state
+        state_msg = f"5-Hour sent: {self.notification_state['five_hour']['sent']}\n7-Day sent: {self.notification_state['seven_day']['sent']}"
+        try:
+            notify(
+                title="Notification State",
+                body=state_msg,
+                app_id="Claude Usage Monitor"
+            )
+        except Exception as e:
+            debug_log(f"Failed to show state: {e}")
+
+    def reset_notification_history(self, icon=None, item=None):
+        """Reset notification history"""
+        self.notification_state = {
+            "five_hour": {"sent": []},
+            "seven_day": {"sent": []}
+        }
+        save_notification_state(self.notification_state)
+        try:
+            notify(
+                title="Reset Complete",
+                body="Notification history has been cleared",
+                app_id="Claude Usage Monitor"
+            )
+        except Exception as e:
+            debug_log(f"Failed to show reset confirmation: {e}")
+
+    def exit_app(self, icon=None, item=None):
+        """Exit the application"""
+        self.stop_threads.set()
+        if self.icon:
+            self.icon.stop()
+
 
 if __name__ == "__main__":
-    # Generate Postman collection from curl BEFORE running Newman
+    # Generate Postman collection from curl BEFORE running
     generate_postman_collection_from_curl(CURL_COMMAND)
-    
-    # Start menu bar app
-    MenuBarApp().run()
+
+    # Create and run platform-specific app
+    if platform.system() == "Darwin":
+        app = MacOSMenuBarApp()
+    elif platform.system() == "Windows":
+        app = WindowsTrayApp()
+    else:
+        raise RuntimeError(f"Unsupported platform: {platform.system()}")
+
+    app.run()
 
