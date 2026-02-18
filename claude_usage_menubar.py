@@ -520,7 +520,7 @@ class WindowsTrayApp(UsageMonitorApp):
 
         image = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
-        dc.ellipse([4, 4, 60, 60], fill=fill_color, outline=outline_color, width=2)
+        dc.rounded_rectangle([4, 4, 60, 60], radius=14, fill=fill_color, outline=outline_color, width=2)
 
         font = self._get_font(len(display_text))
         bbox = dc.textbbox((0, 0), display_text, font=font)
