@@ -474,7 +474,7 @@ class WindowsTrayApp(UsageMonitorApp):
 
     def _get_font(self, nchars):
         """Return a cached font sized for the given character count"""
-        font_size = 44 if nchars == 1 else (36 if nchars == 2 else 26)
+        font_size = 50 if nchars == 1 else (42 if nchars == 2 else 30)
         if font_size not in self._fonts:
             font_paths = [
                 "C:/Windows/Fonts/arialbd.ttf",
