@@ -11,7 +11,7 @@ Cross-platform Python script to monitor Claude AI usage limits and display them 
 - Desktop notifications at usage thresholds (25%, 50%, 75%, 90%)
 - Automatic updates every 3 minutes
 - Manual update option
-- Reset time display with countdown
+- Reset time display
 
 ## Platform Support
 
@@ -21,8 +21,6 @@ Cross-platform Python script to monitor Claude AI usage limits and display them 
 ## Prerequisites
 
 1. **Python 3.8+** with pip
-2. **Node.js v16 or later** - [Download here](https://nodejs.org/)
-3. **newman CLI tool**: Install globally with `npm install -g newman`
 
 ## Installation
 
@@ -33,14 +31,9 @@ Cross-platform Python script to monitor Claude AI usage limits and display them 
    cd claude-usage-widget
    ```
 
-3. Install Python dependencies (platform-specific packages install automatically):
+3. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
-   ```
-
-   Or with pip3:
-   ```bash
-   pip3 install -r requirements.txt
    ```
 
 ## Setup
@@ -90,7 +83,7 @@ The app will appear in your **menu bar** (top-right corner). Click the icon to a
 - **Test Notification** - Verify notifications are working
 - **5-Hour Reset** - Shows when your session limit resets
 - **7-Day Reset** - Shows when your weekly limit resets
-- **Next Update** - Countdown to next automatic update
+- **Next Update** - Shows the time of the next automatic update
 - **Exit** (Windows only) - Close the application
 
 ### Understanding the Display
@@ -120,7 +113,6 @@ Notifications are sent only once per threshold to avoid spam.
 
 **App not starting:**
 - Verify Python 3.8+ is installed: `python --version`
-- Verify newman is installed: `newman --version`
 - Check that `curl.txt` exists and contains a valid cURL command
 
 ### macOS
@@ -132,17 +124,12 @@ Notifications are sent only once per threshold to avoid spam.
 
 ### Both Platforms
 
-**"Newman failed" error:**
-- Verify Node.js is installed: `node --version`
-- Verify newman is installed: `newman --version`
-- Reinstall newman: `npm install -g newman`
-
 **"No cURL command found" error:**
 - Ensure `curl.txt` exists in the same directory as the script
 - Verify the file contains a complete cURL command from Claude's usage page
 - Re-copy the cURL command from your browser
 
-**Usage shows "N/A":**
+**Usage shows "N/A" or fetch error:**
 - Your cURL token may have expired
 - Get a fresh cURL command from Claude's usage page
 - Replace the contents of `curl.txt` with the new command
@@ -199,13 +186,10 @@ Edit `claude_usage_menubar.py` to customize:
 ### macOS
 - `rumps` - Menu bar integration and notifications
 
-### Both Platforms
-- `newman` (Node.js) - API request handling
-
 ## How It Works
 
-1. Converts your cURL command to a Postman collection
-2. Uses newman to execute the API request every 3 minutes
+1. Parses your cURL command to extract the API URL and headers
+2. Makes a direct HTTP request to the Claude usage API every 3 minutes
 3. Parses the response to extract usage percentages
 4. Displays data in system tray (Windows) or menu bar (macOS)
 5. Sends notifications when usage crosses threshold percentages
