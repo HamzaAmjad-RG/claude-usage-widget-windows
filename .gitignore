@@ -1,4 +1,15 @@
+.claude/
 notification_state.json
 output.json
 MyCollection.postman_collection.json
 curl.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
