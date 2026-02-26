@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import json
 import re
 import subprocess
@@ -62,21 +63,46 @@ def debug_log(*args, **kwargs):
 
 # Config
 UPDATE_INTERVAL = 180  # seconds, 3 minutes
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# When running as a PyInstaller --onefile exe, __file__ points to a temp
+# extraction dir.  Use the exe's directory instead so curl.txt etc. are
+# found next to the installed executable.
+if getattr(sys, 'frozen', False):
+    _SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(_SCRIPT_DIR, "notification_state.json")
 WIDGET_STATE_FILE = os.path.join(_SCRIPT_DIR, "widget_state.json")
 
 # Read cURL command from file
 CURL_FILE = os.path.join(_SCRIPT_DIR, "curl.txt")
-if os.path.exists(CURL_FILE):
-    with open(CURL_FILE, "r", encoding="utf-8") as f:
-        CURL_COMMAND = f.read().strip()
-else:
-    debug_log(f"{CURL_FILE} not found!")
-    CURL_COMMAND = ""
+if not os.path.exists(CURL_FILE):
+    debug_log(f"{CURL_FILE} not found, creating empty file")
+    with open(CURL_FILE, "w", encoding="utf-8") as f:
+        f.write("")
+
+with open(CURL_FILE, "r", encoding="utf-8") as f:
+    CURL_COMMAND = f.read().strip()
 
 if not CURL_COMMAND:
-    raise RuntimeError("No cURL command found in curl.txt")
+    _msg = (
+        "curl.txt is empty — setup is required.\n\n"
+        "To get your cURL command:\n"
+        "1. Open Chrome and go to claude.ai/settings/usage\n"
+        "2. Open DevTools (F12) → Network tab\n"
+        "3. Refresh the page\n"
+        "4. Find the request to \"usage\" → right-click → Copy as cURL\n"
+        "5. Paste it into curl.txt and save\n\n"
+        "6. Run the App again from deskop icon or wherever you installed.\n\n"
+        "The file will now open in Notepad for you to paste into."
+    )
+    if platform.system() == "Windows":
+        ctypes.windll.user32.MessageBoxW(
+            0, _msg, "Claude Usage Widget - Setup Required", 0x40  # MB_ICONINFORMATION
+        )
+        subprocess.Popen(["notepad", CURL_FILE])
+    else:
+        print(_msg)
+    sys.exit(1)
 
 PARSED_CURL = {}  # populated at startup after parse_curl_command is defined
 
