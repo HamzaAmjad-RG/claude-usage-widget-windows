@@ -1,9 +1,13 @@
 ; Inno Setup script for Claude Usage Widget
 ; Compile with Inno Setup Compiler (https://jrsoftware.org/isinfo.php)
 
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
+
 [Setup]
 AppName=Claude Usage Widget
-AppVersion=1.0
+AppVersion={#MyAppVersion}
 AppPublisher=HamzaAmjad-RG
 AppPublisherURL=https://github.com/HamzaAmjad-RG/claude-usage-widget-windows
 DefaultDirName={autopf}\ClaudeUsageWidget
